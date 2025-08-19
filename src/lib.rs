@@ -38,9 +38,9 @@
 //! ### Multiplayer games
 //!
 //! Games with more than two players will have to use the general
-//! `update_ratings` method. It takes a vector of teams and a vector of ranks,
-//! with each team being a vector of player ratings. If no error occurs, the
-//! method returns a vector of the same form as the input with updated ratings.
+//! `update_ratings` method. It takes an array of teams and an array of ranks,
+//! with each team being an array of player ratings. The method returns an array
+//! of the same form as the input with updated ratings.
 //!
 //! #### Example 1: Racing Game
 //!
@@ -58,9 +58,9 @@
 //! let p5 = bbt::Rating::default();
 //! let p6 = bbt::Rating::default();
 //!
-//! let new_ratings = rater.update_ratings(vec![vec![p1], vec![p2], vec![p3],
-//!                                             vec![p4], vec![p5], vec![p6]],
-//!                                        vec![1, 2, 3, 4, 5, 6]).unwrap();
+//! let new_ratings = rater.update_ratings([[p1], [p2], [p3],
+//!                                         [p4], [p5], [p6]],
+//!                                        [1, 2, 3, 4, 5, 6]);
 //! ```
 //!
 //! In the example, the first player places first, the second player second, and
@@ -91,14 +91,14 @@
 //! let gabe    = bbt::Rating::default();
 //! let henry   = bbt::Rating::default();
 //!
-//! let new_ratings = rater.update_ratings(vec![vec![alice, bob],
-//!                                             vec![charlie, dave],
-//!                                             vec![eve, fred],
-//!                                             vec![gabe, henry]],
-//!                                        vec![1, 2, 2, 4]).unwrap();
+//! let new_ratings = rater.update_ratings([[alice, bob],
+//!                                         [charlie, dave],
+//!                                         [eve, fred],
+//!                                         [gabe, henry]],
+//!                                        [1, 2, 2, 4]);
 //! ```
 //!
-//! The second vector assigns a rank to the teams given in the first vector.
+//! The second array assigns a rank to the teams given in the first array.
 //! Team 1 placed first, teams 2 and 3 tie for second place and team 4 comes in
 //! fourth.
 //!
@@ -117,8 +117,8 @@ extern crate serde;
 #[cfg(feature = "serde")]
 mod serialization;
 
-use std::cmp::Ordering;
-use std::fmt;
+use core::cmp::Ordering;
+use core::fmt;
 
 /// Rater is used to calculate rating updates given the β-parameter.
 pub struct Rater {
@@ -127,7 +127,7 @@ pub struct Rater {
 
 impl Rater {
     /// This method instantiates a new rater with the given β-parameter.
-    pub fn new(beta: f64) -> Rater {
+    pub const fn new(beta: f64) -> Rater {
         Rater {
             beta_sq: beta * beta,
         }
@@ -143,44 +143,27 @@ impl Default for Rater {
 }
 
 impl Rater {
-    /// This method takes a vector of teams, with each team being a vector of
-    /// player ratings, and a vector ranks of the same size that specifies the
-    /// order in which the team finished a game. It returns either
-    /// `Err(error_message)` if the input is incorrect or
-    /// `Ok(Vec<Vec<Rating>>)`. The returned vector is an updated version of
-    /// the `teams` vector that was passed into the function.
-    pub fn update_ratings(
+    /// This method takes an array of teams, with each team being an array of
+    /// player ratings, and an array `ranks` of the same size that specifies the
+    /// order in which the team finished a game. It returns an updated version of
+    /// the `teams` array that was passed into the function.
+    pub fn update_ratings<const N: usize, const P: usize>(
         &self,
-        teams: Vec<Vec<Rating>>,
-        ranks: Vec<usize>,
-    ) -> Result<Vec<Vec<Rating>>, &'static str> {
-        if teams.len() != ranks.len() {
-            return Err("`teams` and `ranks` vectors must be of the same length");
-        }
-
-        let mut team_mu = vec![0.0; teams.len()];
-        let mut team_sigma_sq = vec![0.0; teams.len()];
-        let mut team_omega = vec![0.0; teams.len()];
-        let mut team_delta = vec![0.0; teams.len()];
-
+        teams: [[Rating; P]; N],
+        ranks: [usize; N],
+    ) -> [[Rating; P]; N] {
         ////////////////////////////////////////////////////////////////////////
         // Step 1 - Collect Team skill and variance ////////////////////////////
         ////////////////////////////////////////////////////////////////////////
 
-        for (team_idx, team) in teams.iter().enumerate() {
-            if team.is_empty() {
-                return Err("At least one of the teams contains no players");
-            }
-
-            for player in team.iter() {
-                team_mu[team_idx] += player.mu;
-                team_sigma_sq[team_idx] += player.sigma_sq;
-            }
-        }
+        let team_mu: [f64; _] = teams.map(|t| t.iter().map(|p| p.mu).sum());
+        let team_sigma_sq: [f64; _] = teams.map(|t| t.iter().map(|p| p.sigma_sq).sum());
 
         ////////////////////////////////////////////////////////////////////////
         // Step 2 - Compute Team Omega and Delta ///////////////////////////////
         ////////////////////////////////////////////////////////////////////////
+        let mut team_omega = [0.0; N];
+        let mut team_delta = [0.0; N];
 
         for team_idx in 0..teams.len() {
             for team2_idx in 0..teams.len() {
@@ -216,17 +199,16 @@ impl Rater {
         // Step 3 - Individual skill update ////////////////////////////////////
         ////////////////////////////////////////////////////////////////////////
 
-        let mut result = Vec::with_capacity(teams.len());
+        let mut vals = team_sigma_sq.into_iter().zip(team_omega).zip(team_delta);
+        teams.map(|team| {
+            let ((team_sigma_sq, team_omega), team_delta) = vals.next().unwrap();
 
-        for (team_idx, team) in teams.iter().enumerate() {
-            let mut team_result = Vec::with_capacity(team.len());
-
-            for player in team.iter() {
+            team.map(|player| {
                 let new_mu =
-                    player.mu + (player.sigma_sq / team_sigma_sq[team_idx]) * team_omega[team_idx];
+                    player.mu + (player.sigma_sq / team_sigma_sq) * team_omega;
 
                 let mut sigma_adj =
-                    1.0 - (player.sigma_sq / team_sigma_sq[team_idx]) * team_delta[team_idx];
+                    1.0 - (player.sigma_sq / team_sigma_sq) * team_delta;
 
                 if sigma_adj < 0.0001 {
                     sigma_adj = 0.0001;
@@ -234,17 +216,13 @@ impl Rater {
 
                 let new_sigma_sq = player.sigma_sq * sigma_adj;
 
-                team_result.push(Rating {
+                Rating {
                     mu: new_mu,
                     sigma: new_sigma_sq.sqrt(),
                     sigma_sq: new_sigma_sq,
-                });
-            }
-
-            result.push(team_result);
-        }
-
-        Ok(result)
+                }
+            })
+        })
     }
 
     /// This method calculates the new ratings for two players after a
@@ -252,16 +230,16 @@ impl Rater {
     /// perspective, i.e. `Win` if the first player won, `Loss` if the second
     /// player won and `Draw` if neither player won.
     pub fn duel(&self, p1: Rating, p2: Rating, outcome: Outcome) -> (Rating, Rating) {
-        let teams = vec![vec![p1], vec![p2]];
+        let teams = [[p1], [p2]];
         let ranks = match outcome {
-            Outcome::Win => vec![1, 2],
-            Outcome::Loss => vec![2, 1],
-            Outcome::Draw => vec![1, 1],
+            Outcome::Win => [1, 2],
+            Outcome::Loss => [2, 1],
+            Outcome::Draw => [1, 1],
         };
 
-        let result = self.update_ratings(teams, ranks).unwrap();
+        let [[p1], [p2]] = self.update_ratings(teams, ranks);
 
-        (result[0][0].clone(), result[1][0].clone())
+        (p1, p2)
     }
 }
 
@@ -279,7 +257,7 @@ pub enum Outcome {
 }
 
 /// Rating represents the skill of a player.
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct Rating {
     mu: f64,
     sigma: f64,
@@ -292,13 +270,13 @@ impl Default for Rating {
         Rating {
             mu: 25.0,
             sigma: 25.0 / 3.0,
-            sigma_sq: f64::powf(25.0 / 3.0, 2.0),
+            sigma_sq: (25.0 / 3.0) * (25.0 / 3.0),
         }
     }
 }
 
 impl PartialOrd for Rating {
-    fn partial_cmp(&self, other: &Rating) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Rating) -> Option<Ordering> {
         (self.mu - 3.0 * self.sigma).partial_cmp(&(other.mu - 3.0 * other.sigma))
     }
 }
@@ -321,21 +299,21 @@ impl fmt::Debug for Rating {
 }
 
 impl Rating {
-    pub fn new(mu: f64, sigma: f64) -> Rating {
+    pub const fn new(mu: f64, sigma: f64) -> Rating {
         Rating {
             mu,
             sigma,
-            sigma_sq: sigma.powf(2.0),
+            sigma_sq: sigma * sigma,
         }
     }
 
     /// Returns the estimated skill of the player.
-    pub fn mu(&self) -> f64 {
+    pub const fn mu(&self) -> f64 {
         self.mu
     }
 
     /// Returns the variance on the estimate of the player's skill.
-    pub fn sigma(&self) -> f64 {
+    pub const fn sigma(&self) -> f64 {
         self.sigma
     }
 }
@@ -354,13 +332,12 @@ mod test {
 
     #[test]
     fn two_player_duel_win_loss() {
-        let p1 = ::Rating::default();
-        let p2 = ::Rating::default();
+        let p1 = Rating::default();
+        let p2 = Rating::default();
 
-        let rater = ::Rater::default();
+        let rater = Rater::default();
         let new_rs = rater
-            .update_ratings(vec![vec![p1], vec![p2]], vec![0, 1])
-            .unwrap();
+            .update_ratings([[p1], [p2]], [0, 1]);
 
         assert!((new_rs[0][0].mu - 27.63523138).abs() < 1.0 / 100000000.0);
         assert!((new_rs[0][0].sigma - 8.0655063).abs() < 1.0 / 1000000.0);
@@ -390,10 +367,10 @@ mod test {
         let p4 = Rating::default();
 
         let rater = Rater::default();
-        let teams = vec![vec![p1], vec![p2], vec![p3], vec![p4]];
-        let ranks = vec![1, 2, 3, 4];
+        let teams = [[p1], [p2], [p3], [p4]];
+        let ranks = [1, 2, 3, 4];
 
-        let new_ratings = rater.update_ratings(teams, ranks).unwrap();
+        let new_ratings = rater.update_ratings(teams, ranks);
 
         assert!((new_ratings[0][0].mu - 32.9056941).abs() < 1.0 / 10000000.0);
         assert!((new_ratings[1][0].mu - 27.6352313).abs() < 1.0 / 10000000.0);

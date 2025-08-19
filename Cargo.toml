@@ -8,6 +8,7 @@ documentation = "https://docs.rs/bbt/"
 readme = "README.md"
 keywords = ["bayesian", "skill", "rating"]
 license = "MIT"
+edition = "2021"
 
 [dependencies]
 serde = { version = "1.0.70", optional = true }
